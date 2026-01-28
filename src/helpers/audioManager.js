@@ -296,7 +296,8 @@ class AudioManager {
       // (renderer-side AudioContext conversion was unreliable with WebM/Opus format)
       const arrayBuffer = await audioBlob.arrayBuffer();
       const language = localStorage.getItem("preferredLanguage");
-      const options = { model };
+      const useGPU = localStorage.getItem("useGPU") === "true";
+      const options = { model, useCuda: useGPU };
       if (language && language !== "auto") {
         options.language = language;
       }

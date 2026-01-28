@@ -10,6 +10,7 @@ export interface TranscriptionSettings {
   whisperModel: string;
   localTranscriptionProvider: string;
   parakeetModel: string;
+  useGPU: boolean;
   allowOpenAIFallback: boolean;
   allowLocalFallback: boolean;
   fallbackWhisperModel: string;
@@ -69,6 +70,12 @@ export function useSettings() {
   const [parakeetModel, setParakeetModel] = useLocalStorage("parakeetModel", "", {
     serialize: String,
     deserialize: String,
+  });
+
+  // GPU acceleration for local Whisper transcription (CUDA on Windows/Linux)
+  const [useGPU, setUseGPU] = useLocalStorage("useGPU", false, {
+    serialize: String,
+    deserialize: (value) => value === "true",
   });
 
   const [allowOpenAIFallback, setAllowOpenAIFallback] = useLocalStorage(
@@ -411,6 +418,7 @@ export function useSettings() {
       if (settings.localTranscriptionProvider !== undefined)
         setLocalTranscriptionProvider(settings.localTranscriptionProvider);
       if (settings.parakeetModel !== undefined) setParakeetModel(settings.parakeetModel);
+      if (settings.useGPU !== undefined) setUseGPU(settings.useGPU);
       if (settings.allowOpenAIFallback !== undefined)
         setAllowOpenAIFallback(settings.allowOpenAIFallback);
       if (settings.allowLocalFallback !== undefined)
@@ -432,6 +440,7 @@ export function useSettings() {
       setWhisperModel,
       setLocalTranscriptionProvider,
       setParakeetModel,
+      setUseGPU,
       setAllowOpenAIFallback,
       setAllowLocalFallback,
       setFallbackWhisperModel,
@@ -470,6 +479,7 @@ export function useSettings() {
     whisperModel,
     localTranscriptionProvider,
     parakeetModel,
+    useGPU,
     allowOpenAIFallback,
     allowLocalFallback,
     fallbackWhisperModel,
@@ -491,6 +501,7 @@ export function useSettings() {
     setWhisperModel,
     setLocalTranscriptionProvider,
     setParakeetModel,
+    setUseGPU,
     setAllowOpenAIFallback,
     setAllowLocalFallback,
     setFallbackWhisperModel,

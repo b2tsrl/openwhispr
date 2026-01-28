@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Download, Trash2, Check, Cloud, Lock, X } from "lucide-react";
+import { Download, Trash2, Check, Cloud, Lock, X, Cpu, Zap } from "lucide-react";
 import { ProviderIcon } from "./ui/ProviderIcon";
 import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
@@ -163,6 +163,8 @@ interface TranscriptionModelPickerProps {
   setCustomTranscriptionApiKey?: (key: string) => void;
   cloudTranscriptionBaseUrl?: string;
   setCloudTranscriptionBaseUrl?: (url: string) => void;
+  useGPU?: boolean;
+  setUseGPU?: (useGPU: boolean) => void;
   className?: string;
   variant?: "onboarding" | "settings";
 }
@@ -199,10 +201,17 @@ export default function TranscriptionModelPicker({
   setCustomTranscriptionApiKey,
   cloudTranscriptionBaseUrl = "",
   setCloudTranscriptionBaseUrl,
+  useGPU = false,
+  setUseGPU,
   className = "",
   variant = "settings",
 }: TranscriptionModelPickerProps) {
   const [localModels, setLocalModels] = useState<WhisperModel[]>([]);
+  const [cudaAvailable, setCudaAvailable] = useState<boolean | null>(null);
+  const [cudaBinaryAvailable, setCudaBinaryAvailable] = useState<boolean | null>(null);
+  const [isDownloadingCuda, setIsDownloadingCuda] = useState(false);
+  const [cudaDownloadProgress, setCudaDownloadProgress] = useState(0);
+  const platform = useMemo(() => window.electronAPI?.getPlatform?.() || "unknown", []);
   const [parakeetModels, setParakeetModels] = useState<WhisperModel[]>([]);
   const [internalLocalProvider, setInternalLocalProvider] = useState(selectedLocalProvider);
   const hasLoadedRef = useRef(false);
@@ -346,6 +355,37 @@ export default function TranscriptionModelPicker({
     return () => window.removeEventListener("openwhispr-models-cleared", handleModelsCleared);
   }, [loadLocalModels]);
 
+  // Check CUDA availability when in local mode with Whisper (Windows/Linux only)
+  useEffect(() => {
+    if (!useLocalWhisper || internalLocalProvider !== "whisper") return;
+    if (platform === "darwin") return; // macOS uses Metal, not CUDA
+
+    const checkCuda = async () => {
+      try {
+        const [available, binaryAvailable] = await Promise.all([
+          window.electronAPI?.checkCudaAvailable?.() ?? false,
+          window.electronAPI?.checkCudaBinaryAvailable?.() ?? false,
+        ]);
+        setCudaAvailable(available);
+        setCudaBinaryAvailable(binaryAvailable);
+      } catch (error) {
+        console.error("[TranscriptionModelPicker] Failed to check CUDA:", error);
+        setCudaAvailable(false);
+        setCudaBinaryAvailable(false);
+      }
+    };
+
+    checkCuda();
+  }, [useLocalWhisper, internalLocalProvider, platform]);
+
+  // Listen for CUDA binary download progress
+  useEffect(() => {
+    const cleanup = window.electronAPI?.onCudaBinaryDownloadProgress?.((data: { percentage: number }) => {
+      setCudaDownloadProgress(data.percentage);
+    });
+    return () => cleanup?.();
+  }, []);
+
   const {
     downloadingModel,
     downloadProgress,
@@ -434,6 +474,31 @@ export default function TranscriptionModelPicker({
     },
     [onLocalModelSelect, onLocalProviderSelect]
   );
+
+  // Handle CUDA binary download
+  const handleDownloadCudaBinary = useCallback(async () => {
+    setIsDownloadingCuda(true);
+    setCudaDownloadProgress(0);
+    try {
+      const result = await window.electronAPI?.downloadWhisperCudaBinary?.();
+      if (result?.success) {
+        setCudaBinaryAvailable(true);
+      } else {
+        console.error("[TranscriptionModelPicker] CUDA binary download failed:", result?.error);
+      }
+    } catch (error) {
+      console.error("[TranscriptionModelPicker] CUDA binary download error:", error);
+    } finally {
+      setIsDownloadingCuda(false);
+      setCudaDownloadProgress(0);
+    }
+  }, []);
+
+  // Handle GPU toggle
+  const handleGPUToggle = useCallback(() => {
+    if (!cudaAvailable || !cudaBinaryAvailable) return;
+    setUseGPU?.(!useGPU);
+  }, [cudaAvailable, cudaBinaryAvailable, useGPU, setUseGPU]);
 
   const handleBaseUrlBlur = useCallback(() => {
     if (!setCloudTranscriptionBaseUrl || selectedCloudProvider !== "custom") return;
@@ -874,6 +939,95 @@ export default function TranscriptionModelPicker({
 
             {internalLocalProvider === "whisper" && renderLocalModels()}
             {internalLocalProvider === "nvidia" && renderParakeetModels()}
+
+            {/* GPU Acceleration Section - Only show for Whisper on Windows/Linux */}
+            {internalLocalProvider === "whisper" && platform !== "darwin" && (
+              <div className="mt-6 pt-4 border-t border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${useGPU && cudaBinaryAvailable ? "bg-green-100" : "bg-gray-100"}`}>
+                      {useGPU && cudaBinaryAvailable ? (
+                        <Zap className="w-5 h-5 text-green-600" />
+                      ) : (
+                        <Cpu className="w-5 h-5 text-gray-600" />
+                      )}
+                    </div>
+                    <div>
+                      <h5 className="font-medium text-gray-900">GPU Acceleration (CUDA)</h5>
+                      <p className="text-sm text-gray-500">
+                        {cudaAvailable === null
+                          ? "Checking GPU availability..."
+                          : cudaAvailable
+                            ? "NVIDIA GPU detected"
+                            : "No NVIDIA GPU detected"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    {/* Download button if GPU available but binary missing */}
+                    {cudaAvailable && !cudaBinaryAvailable && !isDownloadingCuda && (
+                      <Button
+                        onClick={handleDownloadCudaBinary}
+                        size="sm"
+                        className="bg-purple-600 hover:bg-purple-700 text-white"
+                      >
+                        <Download size={14} className="mr-1" />
+                        Download CUDA ({platform === "win32" ? "634 MB" : "253 MB"})
+                      </Button>
+                    )}
+
+                    {/* Progress during download */}
+                    {isDownloadingCuda && (
+                      <div className="flex items-center gap-2">
+                        <div className="w-32 h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-purple-600 transition-all duration-300"
+                            style={{ width: `${cudaDownloadProgress}%` }}
+                          />
+                        </div>
+                        <span className="text-sm text-gray-600">{cudaDownloadProgress}%</span>
+                      </div>
+                    )}
+
+                    {/* Toggle switch when binary is available */}
+                    {cudaBinaryAvailable && (
+                      <button
+                        onClick={handleGPUToggle}
+                        disabled={!cudaAvailable}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
+                          !cudaAvailable
+                            ? "bg-gray-200 cursor-not-allowed opacity-50"
+                            : useGPU
+                              ? "bg-purple-600"
+                              : "bg-gray-200"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow ${
+                            useGPU ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Warning message if GPU not available */}
+                {cudaAvailable === false && (
+                  <p className="mt-2 text-xs text-amber-600 bg-amber-50 p-2 rounded">
+                    GPU acceleration requires an NVIDIA GPU with CUDA support. Transcription will use CPU.
+                  </p>
+                )}
+
+                {/* Info when GPU is enabled */}
+                {useGPU && cudaBinaryAvailable && cudaAvailable && (
+                  <p className="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded">
+                    GPU acceleration enabled. Transcription will be faster on supported hardware.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

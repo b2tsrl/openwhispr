@@ -1,4 +1,4 @@
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const fs = require("fs");
 const net = require("net");
 const os = require("os");
@@ -22,8 +22,11 @@ class WhisperServerManager {
     this.startupPromise = null;
     this.healthCheckInterval = null;
     this.cachedServerBinaryPath = null;
+    this.cachedCudaBinaryPath = null;
     this.cachedFFmpegPath = null;
     this.canConvert = false;
+    this.usingCuda = false;
+    this._cudaAvailable = null; // Cache for CUDA availability check
   }
 
   getFFmpegPath() {
@@ -116,13 +119,27 @@ class WhisperServerManager {
     return null;
   }
 
-  getServerBinaryPath() {
-    if (this.cachedServerBinaryPath) return this.cachedServerBinaryPath;
+  getServerBinaryPath(useCuda = false) {
+    // Use appropriate cache based on variant
+    const cacheKey = useCuda ? "cachedCudaBinaryPath" : "cachedServerBinaryPath";
+    if (this[cacheKey]) return this[cacheKey];
 
     const platform = process.platform;
     const arch = process.arch;
     const platformArch = `${platform}-${arch}`;
+
+    // macOS doesn't have CUDA variant (uses Metal automatically)
+    const variant = platform !== "darwin" && useCuda ? "cuda" : "cpu";
+    const isRequestingCuda = useCuda && platform !== "darwin";
+
+    // Build binary name based on variant
     const binaryName =
+      platform === "win32"
+        ? `whisper-server-${platformArch}-${variant}.exe`
+        : `whisper-server-${platformArch}-${variant}`;
+
+    // Legacy names (for backwards compatibility with existing installations)
+    const legacyBinaryName =
       platform === "win32"
         ? `whisper-server-${platformArch}.exe`
         : `whisper-server-${platformArch}`;
@@ -131,22 +148,31 @@ class WhisperServerManager {
     const candidates = [];
 
     if (process.resourcesPath) {
-      candidates.push(
-        path.join(process.resourcesPath, "bin", binaryName),
-        path.join(process.resourcesPath, "bin", genericName)
-      );
+      candidates.push(path.join(process.resourcesPath, "bin", binaryName));
+      // Only add legacy names for CPU variant
+      if (!isRequestingCuda) {
+        candidates.push(
+          path.join(process.resourcesPath, "bin", legacyBinaryName),
+          path.join(process.resourcesPath, "bin", genericName)
+        );
+      }
     }
 
-    candidates.push(
-      path.join(__dirname, "..", "..", "resources", "bin", binaryName),
-      path.join(__dirname, "..", "..", "resources", "bin", genericName)
-    );
+    candidates.push(path.join(__dirname, "..", "..", "resources", "bin", binaryName));
+    // Only add legacy names for CPU variant
+    if (!isRequestingCuda) {
+      candidates.push(
+        path.join(__dirname, "..", "..", "resources", "bin", legacyBinaryName),
+        path.join(__dirname, "..", "..", "resources", "bin", genericName)
+      );
+    }
 
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
         try {
           fs.statSync(candidate);
-          this.cachedServerBinaryPath = candidate;
+          this[cacheKey] = candidate;
+          debugLogger.debug(`Found whisper-server binary (${variant})`, { path: candidate });
           return candidate;
         } catch {
           // Can't access binary
@@ -155,6 +181,51 @@ class WhisperServerManager {
     }
 
     return null;
+  }
+
+  /**
+   * Check if NVIDIA GPU with CUDA support is available on the system.
+   * Uses nvidia-smi to detect NVIDIA GPUs.
+   * @returns {boolean} True if CUDA-capable GPU is detected
+   */
+  checkCudaAvailable() {
+    // Return cached result if available
+    if (this._cudaAvailable !== null) {
+      return this._cudaAvailable;
+    }
+
+    // macOS uses Metal, not CUDA
+    if (process.platform === "darwin") {
+      this._cudaAvailable = false;
+      return false;
+    }
+
+    try {
+      // nvidia-smi is installed with NVIDIA drivers on Windows and Linux
+      execSync("nvidia-smi", { stdio: "ignore", timeout: 5000 });
+      debugLogger.info("CUDA available: nvidia-smi found");
+      this._cudaAvailable = true;
+      return true;
+    } catch {
+      debugLogger.debug("CUDA not available: nvidia-smi not found or failed");
+      this._cudaAvailable = false;
+      return false;
+    }
+  }
+
+  /**
+   * Check if the CUDA variant of whisper-server binary is available.
+   * @returns {boolean} True if CUDA binary exists
+   */
+  isCudaBinaryAvailable() {
+    return this.getServerBinaryPath(true) !== null;
+  }
+
+  /**
+   * Clear the cached CUDA binary path (useful after downloading new binary)
+   */
+  clearCudaBinaryCache() {
+    this.cachedCudaBinaryPath = null;
   }
 
   isAvailable() {
@@ -183,7 +254,10 @@ class WhisperServerManager {
   async start(modelPath, options = {}) {
     if (this.startupPromise) return this.startupPromise;
 
-    if (this.ready && this.modelPath === modelPath) return;
+    const useCuda = options.useCuda ?? false;
+
+    // If model is same but CUDA preference changed, restart
+    if (this.ready && this.modelPath === modelPath && this.usingCuda === useCuda) return;
 
     if (this.process) {
       await this.stop();
@@ -198,8 +272,27 @@ class WhisperServerManager {
   }
 
   async _doStart(modelPath, options = {}) {
-    const serverBinary = this.getServerBinaryPath();
+    const useCuda = options.useCuda ?? false;
+
+    // Try to get CUDA binary if requested, fall back to CPU if not available
+    let serverBinary = null;
+    let actuallyUsingCuda = false;
+
+    if (useCuda) {
+      serverBinary = this.getServerBinaryPath(true);
+      if (serverBinary) {
+        actuallyUsingCuda = true;
+        debugLogger.info("Using CUDA-enabled whisper-server");
+      } else {
+        debugLogger.warn("CUDA binary not found, falling back to CPU");
+        serverBinary = this.getServerBinaryPath(false);
+      }
+    } else {
+      serverBinary = this.getServerBinaryPath(false);
+    }
+
     if (!serverBinary) throw new Error("whisper-server binary not found");
+    this.usingCuda = actuallyUsingCuda;
     if (!fs.existsSync(modelPath)) throw new Error(`Model file not found: ${modelPath}`);
 
     this.port = await this.findAvailablePort();
@@ -536,6 +629,9 @@ class WhisperServerManager {
       port: this.port,
       modelPath: this.modelPath,
       modelName: this.modelPath ? path.basename(this.modelPath, ".bin").replace("ggml-", "") : null,
+      usingCuda: this.usingCuda,
+      cudaAvailable: this.checkCudaAvailable(),
+      cudaBinaryAvailable: this.isCudaBinaryAvailable(),
     };
   }
 }

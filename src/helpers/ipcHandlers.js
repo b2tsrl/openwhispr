@@ -287,6 +287,74 @@ class IPCHandlers {
       return this.whisperManager.checkFFmpegAvailability();
     });
 
+    // CUDA/GPU handlers for Whisper
+    ipcMain.handle("check-cuda-available", async () => {
+      try {
+        return this.whisperManager.serverManager.checkCudaAvailable();
+      } catch (error) {
+        debugLogger.error("Error checking CUDA availability:", error);
+        return false;
+      }
+    });
+
+    ipcMain.handle("check-cuda-binary-available", async () => {
+      try {
+        return this.whisperManager.serverManager.isCudaBinaryAvailable();
+      } catch (error) {
+        debugLogger.error("Error checking CUDA binary:", error);
+        return false;
+      }
+    });
+
+    ipcMain.handle("download-whisper-cuda-binary", async (event) => {
+      try {
+        const { spawn } = require("child_process");
+        const scriptPath = path.join(__dirname, "..", "..", "scripts", "download-whisper-cpp.js");
+
+        return new Promise((resolve, reject) => {
+          const child = spawn("node", [scriptPath, "--current", "--cuda"], {
+            cwd: path.join(__dirname, "..", ".."),
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+
+          let stdout = "";
+          let stderr = "";
+
+          child.stdout.on("data", (data) => {
+            stdout += data.toString();
+            // Parse progress if available
+            const progressMatch = data.toString().match(/Downloading:\s*(\d+)%/);
+            if (progressMatch) {
+              event.sender.send("cuda-binary-download-progress", {
+                percentage: parseInt(progressMatch[1], 10),
+              });
+            }
+          });
+
+          child.stderr.on("data", (data) => {
+            stderr += data.toString();
+          });
+
+          child.on("close", (code) => {
+            if (code === 0) {
+              // Clear cached path so it picks up the new binary
+              this.whisperManager.serverManager.clearCudaBinaryCache();
+              resolve({ success: true });
+            } else {
+              reject(new Error(`Download failed with code ${code}: ${stderr || stdout}`));
+            }
+          });
+
+          child.on("error", (error) => {
+            reject(error);
+          });
+        });
+      } catch (error) {
+        debugLogger.error("Error downloading CUDA binary:", error);
+        return { success: false, error: error.message };
+      }
+    });
+
     // Parakeet (NVIDIA) handlers
     ipcMain.handle("transcribe-local-parakeet", async (event, audioBlob, options = {}) => {
       debugLogger.log("transcribe-local-parakeet called", {

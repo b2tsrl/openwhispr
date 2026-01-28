@@ -104,6 +104,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   whisperServerStop: () => ipcRenderer.invoke("whisper-server-stop"),
   whisperServerStatus: () => ipcRenderer.invoke("whisper-server-status"),
 
+  // CUDA/GPU acceleration functions
+  checkCudaAvailable: () => ipcRenderer.invoke("check-cuda-available"),
+  checkCudaBinaryAvailable: () => ipcRenderer.invoke("check-cuda-binary-available"),
+  downloadWhisperCudaBinary: () => ipcRenderer.invoke("download-whisper-cuda-binary"),
+  onCudaBinaryDownloadProgress: registerListener("cuda-binary-download-progress"),
+
   // Local Parakeet (NVIDIA) functions
   transcribeLocalParakeet: (audioBlob, options) =>
     ipcRenderer.invoke("transcribe-local-parakeet", audioBlob, options),

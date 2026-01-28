@@ -240,6 +240,7 @@ class WhisperManager {
     const model = options.model || "base";
     const language = options.language || null;
     const initialPrompt = options.initialPrompt || null;
+    const useCuda = options.useCuda || false;
     const modelPath = this.getModelPath(model);
 
     // Check if model exists
@@ -247,17 +248,18 @@ class WhisperManager {
       throw new Error(`Whisper model "${model}" not downloaded. Please download it from Settings.`);
     }
 
-    return await this.transcribeViaServer(audioBlob, model, language, initialPrompt);
+    return await this.transcribeViaServer(audioBlob, model, language, initialPrompt, useCuda);
   }
 
-  async transcribeViaServer(audioBlob, model, language, initialPrompt = null) {
-    debugLogger.info("Transcription mode: SERVER", { model, language: language || "auto" });
+  async transcribeViaServer(audioBlob, model, language, initialPrompt = null, useCuda = false) {
+    debugLogger.info("Transcription mode: SERVER", { model, language: language || "auto", useCuda });
     const modelPath = this.getModelPath(model);
 
-    // Start server if not running or if model changed
-    if (!this.serverManager.ready || this.currentServerModel !== model) {
-      debugLogger.debug("Starting/restarting whisper-server for model", { model });
-      await this.serverManager.start(modelPath);
+    // Start server if not running, model changed, or CUDA preference changed
+    const cudaChanged = this.serverManager.usingCuda !== useCuda;
+    if (!this.serverManager.ready || this.currentServerModel !== model || cudaChanged) {
+      debugLogger.debug("Starting/restarting whisper-server for model", { model, useCuda, cudaChanged });
+      await this.serverManager.start(modelPath, { useCuda });
       this.currentServerModel = model;
     }
 

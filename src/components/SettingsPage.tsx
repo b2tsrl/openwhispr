@@ -52,6 +52,7 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
     whisperModel,
     localTranscriptionProvider,
     parakeetModel,
+    useGPU,
     allowOpenAIFallback,
     cloudTranscriptionProvider,
     cloudTranscriptionModel,
@@ -76,6 +77,7 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
     setWhisperModel,
     setLocalTranscriptionProvider,
     setParakeetModel,
+    setUseGPU,
     setAllowOpenAIFallback,
     setCloudTranscriptionProvider,
     setCloudTranscriptionModel,
@@ -784,6 +786,8 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
               setCustomTranscriptionApiKey={setCustomTranscriptionApiKey}
               cloudTranscriptionBaseUrl={cloudTranscriptionBaseUrl}
               setCloudTranscriptionBaseUrl={setCloudTranscriptionBaseUrl}
+              useGPU={useGPU}
+              setUseGPU={setUseGPU}
               variant="settings"
             />
           </div>
